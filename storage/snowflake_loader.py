@@ -5,8 +5,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-# Snowflake connection config
-# Password is read from environment variable — never hardcode it
 SNOWFLAKE_CONFIG = {
     "account":   "XBYCFDM-CO68158",
     "user":      "AYANHUSSAIN",
@@ -23,15 +21,63 @@ def get_connection():
     return conn
 
 
+def get_recent_links(cursor, source):
+    """
+    Fetch all links already saved in the last 10 hours for this source.
+    We use this to skip articles we already have — no need to check older data
+    because RSS feeds refresh their articles within hours anyway.
+    """
+
+    query = """
+        SELECT link
+        FROM RAW_NEWS
+        WHERE source = %s
+        AND TRY_TO_TIMESTAMP(fetched_at) >= DATEADD(hour, -10, CURRENT_TIMESTAMP())
+    """
+
+    cursor.execute(query, (source,))
+    rows = cursor.fetchall()
+
+    # Return a set of links for fast lookup
+    return set(row[0] for row in rows)
+
+
+def filter_new_articles(articles, existing_links):
+    """
+    Remove articles whose link already exists in Snowflake (last 10 hrs).
+    Return only the new ones.
+    """
+
+    new_articles     = [a for a in articles if a["link"] not in existing_links]
+    skipped_count    = len(articles) - len(new_articles)
+
+    if skipped_count > 0:
+        print(f"  Skipped {skipped_count} duplicates (already in Snowflake)")
+
+    return new_articles
+
+
 def insert_articles(articles):
     """
     Insert a list of articles into RAW.RAW_NEWS table.
-    Each article is a dict with: source, title, link, published, summary, text, fetched_at
+    Skips articles already fetched in the last 10 hours (Scenario 1 dedup).
     """
 
     conn   = get_connection()
     cursor = conn.cursor()
 
+    # --- Dedup: check what we already have in the last 10 hours ---
+    source         = articles[0]["source"] if articles else ""
+    existing_links = get_recent_links(cursor, source)
+    articles       = filter_new_articles(articles, existing_links)
+
+    if not articles:
+        print(f"  Nothing new to insert for {source}")
+        cursor.close()
+        conn.close()
+        return
+
+    # --- Insert only new articles ---
     insert_sql = """
         INSERT INTO RAW_NEWS (source, title, link, published, description, text, fetched_at)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -53,7 +99,7 @@ def insert_articles(articles):
     cursor.executemany(insert_sql, rows)
     conn.commit()
 
-    print(f"  Inserted {len(rows)} rows into RAW.RAW_NEWS")
+    print(f"  Inserted {len(rows)} new articles into RAW.RAW_NEWS")
 
     cursor.close()
     conn.close()
