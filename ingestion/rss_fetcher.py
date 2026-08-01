@@ -23,7 +23,7 @@ def fetch_feed(name, url):
             "title":      entry.get("title", ""),
             "link":       entry.get("link", ""),
             "published":  entry.get("published", ""),
-            "summary":    entry.get("summary", ""),
+            "description": entry.get("summary", ""),
             "fetched_at": datetime.now().isoformat(),
         }
 

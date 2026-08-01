@@ -1,2 +1,6 @@
 feedparser==6.0.11
 boto3==1.35.0
+requests==2.32.3
+beautifulsoup4==4.12.3
+snowflake-connector-python==3.12.0
+python-dotenv==1.0.1
