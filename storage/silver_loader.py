@@ -17,15 +17,21 @@ def get_existing_hashes(cursor):
     return set(row[0] for row in rows)
 
 
-def bronze_to_silver(results):
+def bronze_to_silver(results, conn=None):
     """
     Takes the current run's articles (already inserted into bronze),
     deduplicates by title hash, and inserts unique stories into silver.
 
     results = { "yahoo_finance": [...], "cnbc_markets": [...], ... }
+
+    conn is optional - pass one in (e.g. from Airflow's SnowflakeHook) to
+    reuse an existing connection. Defaults to get_connection() (.env-based)
+    for local runs. A connection we open ourselves is also closed by us;
+    one passed in is left for the caller to manage.
     """
 
-    conn   = get_connection()
+    owns_connection = conn is None
+    conn   = conn or get_connection()
     cursor = conn.cursor()
 
     # Flatten all articles from all sources into one list
@@ -76,4 +82,6 @@ def bronze_to_silver(results):
     print(f"  Skipped  : {skipped} duplicates (same story seen in multiple sources or already staged)")
 
     cursor.close()
-    conn.close()
+
+    if owns_connection:
+        conn.close()

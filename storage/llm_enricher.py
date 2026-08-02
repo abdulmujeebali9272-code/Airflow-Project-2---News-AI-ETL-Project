@@ -8,8 +8,6 @@ from storage.snowflake_loader import get_connection
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
 MODEL_NAME = "gemini-flash-latest"
 MAX_ROWS   = 3
 MAX_CHARS  = 6000
@@ -44,6 +42,17 @@ RESPONSE_SCHEMA = {
 }
 
 
+def get_client(api_key=None):
+    """
+    Local/CLI Gemini client - reads the key from .env by default.
+    api_key is optional - pass one in (e.g. from an Airflow Variable) to
+    avoid relying on the .env file when running inside Airflow.
+    Built lazily (not at import time) so Airflow can supply the key
+    before this is ever called.
+    """
+    return genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))
+
+
 def get_unprocessed_articles(cursor, limit=MAX_ROWS):
     """
     Fetch the newest staged articles that haven't been enriched yet.
@@ -61,11 +70,12 @@ def get_unprocessed_articles(cursor, limit=MAX_ROWS):
     return cursor.fetchall()
 
 
-def analyze_article(title, text):
+def analyze_article(title, text, client=None):
     """
     Send the article to Gemini and get back a summary + sentiment.
     Returns (summary, sentiment) or (None, None) if anything goes wrong.
     """
+    client = client or get_client()
     trimmed = text[:MAX_CHARS]
     user_prompt = USER_PROMPT_TEMPLATE.format(title=title, text=trimmed)
 
@@ -97,13 +107,23 @@ def update_article(cursor, title_hash, summary, sentiment):
     cursor.execute(update_sql, (summary, sentiment, datetime.now().isoformat(), title_hash))
 
 
-def enrich_staged_news():
+def enrich_staged_news(conn=None, api_key=None):
     """
     Pull up to MAX_ROWS unprocessed articles from silver, run them through
     Gemini for a summary + sentiment, and write the results back.
+
+    conn is optional - pass one in (e.g. from Airflow's SnowflakeHook) to
+    reuse an existing connection. Defaults to get_connection() (.env-based)
+    for local runs. A connection we open ourselves is also closed by us;
+    one passed in is left for the caller to manage.
+
+    api_key is optional - pass one in (e.g. from an Airflow Variable)
+    instead of relying on the .env file.
     """
-    conn   = get_connection()
+    owns_connection = conn is None
+    conn   = conn or get_connection()
     cursor = conn.cursor()
+    client = get_client(api_key)
 
     articles = get_unprocessed_articles(cursor)
     print(f"  Found {len(articles)} unprocessed article(s) (limit {MAX_ROWS})")
@@ -112,7 +132,7 @@ def enrich_staged_news():
 
     for title_hash, title, text in articles:
         print(f"  Analyzing: {title[:60]}...")
-        summary, sentiment = analyze_article(title, text)
+        summary, sentiment = analyze_article(title, text, client=client)
 
         if summary is None:
             print("    Skipped (LLM error)")
@@ -126,4 +146,6 @@ def enrich_staged_news():
     print(f"  Enriched {enriched}/{len(articles)} article(s) with summary + sentiment")
 
     cursor.close()
-    conn.close()
+
+    if owns_connection:
+        conn.close()

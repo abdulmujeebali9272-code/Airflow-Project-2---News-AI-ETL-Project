@@ -1,0 +1,5 @@
+# Extra packages needed only when running dags/news_ai_etl_dag.py inside Airflow.
+# Install these into your Airflow environment (in addition to Airflow itself
+# and requirements.txt) - not needed for local `python run.py` runs.
+apache-airflow-providers-snowflake
+apache-airflow-providers-amazon

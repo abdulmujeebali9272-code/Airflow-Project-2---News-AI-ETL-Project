@@ -1,6 +1,6 @@
 # news-ai-etl
 
-An AI-powered ELT pipeline that fetches financial news from RSS feeds, scrapes full article text, deduplicates across sources, and uses an LLM to generate summaries and sentiment analysis — all stored in Snowflake.
+An AI-powered ELT pipeline that fetches financial news from RSS feeds, scrapes full article text, deduplicates across sources, and uses an LLM to generate summaries and sentiment analysis — all stored in Snowflake and orchestrated with Airflow.
 
 ---
 
@@ -65,10 +65,13 @@ news-ai-etl/
 ├── snowflake_queries/
 │   ├── setup.sql           # Bronze layer DDL (RAW schema + RAW_NEWS table)
 │   └── staging_setup.sql   # Silver layer DDL (STAGING schema + STAGED_NEWS table + LLM columns)
+├── dags/
+│   └── news_ai_etl_dag.py  # Same 6 steps as run.py, split into Airflow tasks
 ├── docs/
 │   └── architecture.md     # Full architecture diagram
-├── run.py                  # Main pipeline entry point
+├── run.py                  # Main pipeline entry point (local/manual run, uses .env)
 ├── requirements.txt
+├── requirements-airflow.txt # Extra provider packages needed only by the DAG
 └── .env                    # Local credentials (never committed)
 ```
 
@@ -170,13 +173,75 @@ python run.py
 
 ---
 
+## Airflow Setup
+
+`dags/news_ai_etl_dag.py` runs the same 6 steps as `run.py`, but as separate
+Airflow tasks (`fetch_rss` → `scrape_articles` → `save_to_s3` → `load_bronze`
+→ `load_silver` → `enrich_with_llm`). It does **not** read `.env` — credentials
+come from Airflow's own Connections and Variables instead, so secrets live in
+one place regardless of who/what triggers a run.
+
+**1 — Install the extra provider packages** into your Airflow environment
+(wherever `airflow` itself is installed — this is separate from the local
+`venv` used for `run.py`):
+```bash
+pip install -r requirements-airflow.txt
+```
+
+**2 — Point Airflow at this repo's `dags/` folder**, and make sure the
+`ingestion/` and `storage/` packages are importable from it — either run
+Airflow with this project root as the working directory, or set:
+```bash
+export PYTHONPATH="/path/to/news-ai-etl:$PYTHONPATH"
+```
+
+**3 — Create the S3 connection** (Airflow UI → Admin → Connections → +):
+| Field | Value |
+|---|---|
+| Connection Id | `aws_default` |
+| Connection Type | Amazon Web Services |
+| AWS Access Key ID | your key |
+| AWS Secret Access Key | your secret |
+| Extra | `{"region_name": "us-east-1"}` |
+
+**4 — Create the Snowflake connection** (Admin → Connections → +):
+| Field | Value |
+|---|---|
+| Connection Id | `snowflake_default` |
+| Connection Type | Snowflake |
+| Login | `AYANHUSSAIN` |
+| Password | your Snowflake password |
+| Account | `XBYCFDM-CO68158` |
+| Warehouse | `NEWS_WH` |
+| Database | `NEWS_AI_ETL` |
+| Schema | `RAW` |
+| Role | `ACCOUNTADMIN` |
+
+**5 — Create the Gemini API key variable** (Admin → Variables → +):
+| Key | Value |
+|---|---|
+| `gemini_api_key` | your Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) |
+
+Both the password and the API key are sensitive — Airflow automatically masks
+any Connection/Variable whose name contains `password`, `key`, `secret`, etc.
+in the UI and logs, so no extra config is needed for that.
+
+**Note on task granularity:** `scrape_articles` and `save_to_s3` pass the full
+article dict (including scraped body text) between tasks via XCom. That's
+fine at this project's volume (~3 feeds, a few dozen articles per run), but
+XCom isn't meant for large payloads — if this ever scales up, switch those
+tasks to read/write through S3 or Snowflake directly instead of passing data
+through XCom.
+
+---
+
 ## Branches
 
 | Branch | Purpose |
 |--------|---------|
 | `feature/local-ingestion` | RSS fetch + scraper + S3 + Snowflake bronze |
 | `feature/dedup` | + 10hr bronze dedup + title hash silver dedup |
-| `feature/airflow-dags` | Airflow DAG conversion (coming soon) |
+| `feature/airflow-dags` | + Gemini enrichment (summary + sentiment) + Airflow DAG conversion |
 
 ---
 
@@ -190,3 +255,4 @@ python run.py
 - **AWS S3** — raw data lake storage
 - **Snowflake** — bronze + silver data warehouse
 - **Google Gemini** (free tier) — summary and sentiment analysis
+- **Apache Airflow** — scheduling and task orchestration (`dags/news_ai_etl_dag.py`)

@@ -57,14 +57,15 @@ def filter_new_articles(articles, existing_links):
     return new_articles
 
 
-def insert_articles(articles):
+def insert_articles(cursor, articles):
     """
-    Insert a list of articles into RAW.RAW_NEWS table.
+    Insert a list of articles into RAW.RAW_NEWS table using the given cursor.
     Skips articles already fetched in the last 10 hours (Scenario 1 dedup).
-    """
 
-    conn   = get_connection()
-    cursor = conn.cursor()
+    Does not commit or close anything - the caller (save_all_to_snowflake)
+    owns the connection lifecycle so it can be reused across sources and
+    shared with an Airflow-provided connection.
+    """
 
     # --- Dedup: check what we already have in the last 10 hours ---
     source         = articles[0]["source"] if articles else ""
@@ -73,8 +74,6 @@ def insert_articles(articles):
 
     if not articles:
         print(f"  Nothing new to insert for {source}")
-        cursor.close()
-        conn.close()
         return
 
     # --- Insert only new articles ---
@@ -97,20 +96,31 @@ def insert_articles(articles):
         rows.append(row)
 
     cursor.executemany(insert_sql, rows)
-    conn.commit()
 
     print(f"  Inserted {len(rows)} new articles into RAW.RAW_NEWS")
 
-    cursor.close()
-    conn.close()
 
-
-def save_all_to_snowflake(results):
+def save_all_to_snowflake(results, conn=None):
     """
     results is a dict: { "yahoo_finance": [...], "cnbc_markets": [...] }
     Loop through each source and insert into Snowflake.
+
+    conn is optional - pass one in (e.g. from Airflow's SnowflakeHook) to
+    reuse an existing connection. Defaults to get_connection() (.env-based)
+    for local runs. A connection we open ourselves is also closed by us;
+    one passed in is left for the caller to manage.
     """
+
+    owns_connection = conn is None
+    conn   = conn or get_connection()
+    cursor = conn.cursor()
 
     for source_name, articles in results.items():
         print(f"\nLoading {source_name} into Snowflake ...")
-        insert_articles(articles)
+        insert_articles(cursor, articles)
+
+    conn.commit()
+    cursor.close()
+
+    if owns_connection:
+        conn.close()
