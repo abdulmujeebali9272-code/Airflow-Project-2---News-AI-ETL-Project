@@ -1,0 +1,104 @@
+import os
+import json
+from datetime import datetime
+from google import genai
+from dotenv import load_dotenv
+from storage.snowflake_loader import get_connection
+
+load_dotenv()
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+MODEL_NAME = "gemini-flash-latest" 
+MAX_ROWS   = 3                       
+MAX_CHARS  = 6000                    
+
+PROMPT_TEMPLATE = """You are a financial news analyst. Read the article below and respond with ONLY a JSON object (no markdown, no extra text) in this exact shape:
+
+{{"summary": "2-3 sentence summary", "sentiment": "positive" | "negative" | "neutral"}}
+
+Article title: {title}
+
+Article text:
+{text}
+"""
+
+
+def get_unprocessed_articles(cursor, limit=MAX_ROWS):
+    """
+    Fetch the newest staged articles that haven't been enriched yet.
+    """
+    query = """
+        SELECT title_hash, title, text
+        FROM NEWS_AI_ETL.STAGING.STAGED_NEWS
+        WHERE summary IS NULL
+        AND text IS NOT NULL
+        AND text != ''
+        ORDER BY staged_at DESC
+        LIMIT %s
+    """
+    cursor.execute(query, (limit,))
+    return cursor.fetchall()
+
+
+def analyze_article(title, text):
+    """
+    Send the article to Gemini and get back a summary + sentiment.
+    Returns (summary, sentiment) or (None, None) if anything goes wrong.
+    """
+    trimmed = text[:MAX_CHARS]
+    prompt = PROMPT_TEMPLATE.format(title=title, text=trimmed)
+
+    try:
+        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+
+        raw = response.text.strip()
+        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+        data = json.loads(raw)
+        return data.get("summary", "").strip(), data.get("sentiment", "").strip().lower()
+
+    except Exception as e:
+        print(f"    Error analyzing article: {e}")
+        return None, None
+
+
+def update_article(cursor, title_hash, summary, sentiment):
+    update_sql = """
+        UPDATE NEWS_AI_ETL.STAGING.STAGED_NEWS
+        SET summary = %s, sentiment = %s, enriched_at = %s
+        WHERE title_hash = %s
+    """
+    cursor.execute(update_sql, (summary, sentiment, datetime.now().isoformat(), title_hash))
+
+
+def enrich_staged_news():
+    """
+    Pull up to MAX_ROWS unprocessed articles from silver, run them through
+    Gemini for a summary + sentiment, and write the results back.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor()
+
+    articles = get_unprocessed_articles(cursor)
+    print(f"  Found {len(articles)} unprocessed article(s) (limit {MAX_ROWS})")
+
+    enriched = 0
+
+    for title_hash, title, text in articles:
+        print(f"  Analyzing: {title[:60]}...")
+        summary, sentiment = analyze_article(title, text)
+
+        if summary is None:
+            print("    Skipped (LLM error)")
+            continue
+
+        update_article(cursor, title_hash, summary, sentiment)
+        enriched += 1
+
+    conn.commit()
+
+    print(f"  Enriched {enriched}/{len(articles)} article(s) with summary + sentiment")
+
+    cursor.close()
+    conn.close()

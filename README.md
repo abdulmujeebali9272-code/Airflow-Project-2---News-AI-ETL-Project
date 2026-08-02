@@ -31,7 +31,7 @@ flowchart LR
     subgraph SILVER["Silver — Snowflake STAGING"]
         direction TB
         D["Title Hash Dedup - Scenario 2 filter"]
-        LLM["LLM - Summary + Sentiment"]
+        LLM["Gemini - Summary + Sentiment\n(3 rows per run)"]
         SN["STAGED_NEWS\ntitle_hash · summary · sentiment"]
     end
 
@@ -42,7 +42,8 @@ flowchart LR
     SC --> S3
     SC --> B
     B --> D
-    D --> LLM
+    D --> SN
+    SN --> LLM
     LLM --> SN
 ```
 
@@ -59,10 +60,11 @@ news-ai-etl/
 ├── storage/
 │   ├── s3_storage.py       # Save raw JSON to S3 (date-partitioned)
 │   ├── snowflake_loader.py # Load raw articles into Snowflake bronze
-│   └── silver_loader.py    # Dedup by title hash, load into silver
+│   ├── silver_loader.py    # Dedup by title hash, load into silver
+│   └── llm_enricher.py     # Gemini summary + sentiment, written back to silver
 ├── snowflake_queries/
 │   ├── setup.sql           # Bronze layer DDL (RAW schema + RAW_NEWS table)
-│   └── staging_setup.sql   # Silver layer DDL (STAGING schema + STAGED_NEWS table)
+│   └── staging_setup.sql   # Silver layer DDL (STAGING schema + STAGED_NEWS table + LLM columns)
 ├── docs/
 │   └── architecture.md     # Full architecture diagram
 ├── run.py                  # Main pipeline entry point
@@ -80,7 +82,8 @@ news-ai-etl/
 | 2 — Scrape | Visit each article URL, extract full body text using BeautifulSoup |
 | 3 — S3 | Save raw JSON to `s3://news-ai-etl-raw/raw/{source}/year=/month=/day=/` |
 | 4 — Bronze | Insert into `RAW.RAW_NEWS` — skip if same source+URL seen in last 10 hrs |
-| 5 — Silver | Deduplicate by title hash (same story across feeds), run LLM, save to `STAGING.STAGED_NEWS` |
+| 5 — Silver | Deduplicate by title hash (same story across feeds), save to `STAGING.STAGED_NEWS` |
+| 6 — Enrich | Pull up to 3 unprocessed rows from `STAGING.STAGED_NEWS`, send article text to Gemini for a summary + sentiment, write results back to the same row |
 
 ---
 
@@ -125,6 +128,12 @@ news-ai-etl/
 | text | TEXT | Full article body |
 | fetched_at | VARCHAR | When fetched |
 | staged_at | VARCHAR | When moved to silver |
+| summary | TEXT | Gemini-generated 2-3 sentence summary |
+| sentiment | VARCHAR | `positive` / `negative` / `neutral` |
+| enriched_at | VARCHAR | When the LLM enrichment step ran |
+
+**Enrichment note:** each run only processes up to **3** rows where `summary IS NULL`
+(newest first) to keep Gemini token usage low — later runs pick up the rest.
 
 ---
 
@@ -142,7 +151,9 @@ pip install -r requirements.txt
 **2 — Create `.env` file**
 ```
 SNOWFLAKE_PASSWORD=your_password_here
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
+Get a free Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 **3 — Set up Snowflake**
 
@@ -178,4 +189,4 @@ python run.py
 - **snowflake-connector-python** — Snowflake integration
 - **AWS S3** — raw data lake storage
 - **Snowflake** — bronze + silver data warehouse
-- **LLM** — summary and sentiment analysis (coming soon)
+- **Google Gemini** (free tier) — summary and sentiment analysis

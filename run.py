@@ -3,6 +3,7 @@ from ingestion.scraper import add_text_to_articles
 from storage.s3_storage import save_all_to_s3
 from storage.snowflake_loader import save_all_to_snowflake
 from storage.silver_loader import bronze_to_silver
+from storage.llm_enricher import enrich_staged_news
 
 
 def main():
@@ -22,6 +23,9 @@ def main():
 
     print("\n=== Step 5: Bronze → Silver (Title Hash Dedup) ===")
     bronze_to_silver(results)
+
+    print("\n=== Step 6: Silver → LLM Enrichment (Gemini Summary + Sentiment) ===")
+    enrich_staged_news()
 
     print("\nDone!")
 
