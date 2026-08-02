@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from storage.snowflake_loader import get_connection
 
@@ -9,19 +10,38 @@ load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-MODEL_NAME = "gemini-flash-latest" 
-MAX_ROWS   = 3                       
-MAX_CHARS  = 6000                    
+MODEL_NAME = "gemini-flash-latest"
+MAX_ROWS   = 3
+MAX_CHARS  = 6000
 
-PROMPT_TEMPLATE = """You are a financial news analyst. Read the article below and respond with ONLY a JSON object (no markdown, no extra text) in this exact shape:
+# ------------------------------------------------------------------
+# A Gemini call has three parts — same idea as any chat-based LLM API:
+#
+#   1. SYSTEM PROMPT  -> "bata do woh kaun hai"   (defines the role + rules)
+#   2. USER PROMPT    -> "actual kaam do"          (the real task: the article)
+#   3. RESPONSE       -> structured answer         (JSON, enforced below)
+# ------------------------------------------------------------------
 
-{{"summary": "2-3 sentence summary", "sentiment": "positive" | "negative" | "neutral"}}
+SYSTEM_PROMPT = """You are a financial news analyst.
+Read the article the user gives you and produce:
+- a 2-3 sentence summary
+- an overall sentiment: "positive", "negative", or "neutral"
+Always respond in the JSON schema you were given. No extra commentary."""
 
-Article title: {title}
+USER_PROMPT_TEMPLATE = """Article title: {title}
 
 Article text:
 {text}
 """
+
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary":   {"type": "string"},
+        "sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+    },
+    "required": ["summary", "sentiment"],
+}
 
 
 def get_unprocessed_articles(cursor, limit=MAX_ROWS):
@@ -47,15 +67,20 @@ def analyze_article(title, text):
     Returns (summary, sentiment) or (None, None) if anything goes wrong.
     """
     trimmed = text[:MAX_CHARS]
-    prompt = PROMPT_TEMPLATE.format(title=title, text=trimmed)
+    user_prompt = USER_PROMPT_TEMPLATE.format(title=title, text=trimmed)
 
     try:
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=RESPONSE_SCHEMA,
+            ),
+        )
 
-        raw = response.text.strip()
-        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-
-        data = json.loads(raw)
+        data = json.loads(response.text)
         return data.get("summary", "").strip(), data.get("sentiment", "").strip().lower()
 
     except Exception as e:
