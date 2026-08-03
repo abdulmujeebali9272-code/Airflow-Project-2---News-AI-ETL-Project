@@ -1,5 +1,7 @@
 # News AI ETL — Architecture Diagram
 
+![Architecture Diagram](ArchitectureDiagram.png)
+
 ```mermaid
 flowchart LR
 

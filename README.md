@@ -6,6 +6,8 @@ An AI-powered ELT pipeline that fetches financial news from RSS feeds, scrapes f
 
 ## Architecture
 
+![Architecture Diagram](docs/ArchitectureDiagram.png)
+
 ```mermaid
 flowchart LR
 
