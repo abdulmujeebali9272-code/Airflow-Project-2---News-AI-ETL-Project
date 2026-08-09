@@ -3,3 +3,4 @@
 # and requirements.txt) - not needed for local `python run.py` runs.
 apache-airflow-providers-snowflake
 apache-airflow-providers-amazon
+apache-airflow-providers-fab

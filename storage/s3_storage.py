@@ -3,8 +3,8 @@ import json
 from datetime import datetime
 
 
-BUCKET_NAME = "news-ai-etl-raw"
-REGION      = "us-east-1"
+BUCKET_NAME = "new-ai-eti-project"
+REGION      = "eu-north-1"
 
 
 def get_client():
