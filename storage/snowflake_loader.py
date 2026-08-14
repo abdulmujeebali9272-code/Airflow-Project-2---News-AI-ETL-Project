@@ -6,8 +6,8 @@ load_dotenv()
 
 
 SNOWFLAKE_CONFIG = {
-    "account":   "kneiclg-bub47449",
-    "user":      "TAHAKHAN",
+    "account":   "KANUPEI-AUB47034",
+    "user":      "MujeebAliKhan",
     "password":  os.getenv("SNOWFLAKE_PASSWORD"),
     "warehouse": "NEWS_WH",
     "database":  "NEWS_AI_ETL",

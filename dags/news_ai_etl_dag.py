@@ -37,7 +37,7 @@ from storage.llm_enricher import enrich_staged_news
 
 
 default_args = {
-    "owner": "MTK",
+    "owner": "Mujeeb",
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
